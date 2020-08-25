@@ -1,0 +1,119 @@
+<html>
+
+<head>
+  <script>
+    function login(e) {
+      e.preventDefault(); // prevent page from reloading due to default submit button behavior
+      hideEverything();
+
+      const username = document.querySelector("input[name='username']").value;
+      const password = document.querySelector("input[name='password']").value;
+
+      var data = {
+        "username": username,
+        "password": password,
+        "requestType": "login"
+      };
+
+      fetch('https://web.njit.edu/~emo26/front_end.php', {
+        method: 'POST',
+        body: JSON.stringify(data)
+      })
+        .then((response) => {
+          return response.json();
+        })
+        .then((json) => {
+          console.log(json);
+          if (json.result == 'success') {
+            redirect(json, username);
+          } else {
+            showLoginError();
+          }
+        })
+        .catch((error) => {
+          //console.error('Error:', error);
+          showSystemError();
+        });
+      return false; // prevent page from reloading due to default submit button behavior
+    }
+
+    function redirect(json, user) {
+      const params = "?user=" + user + "&md5=" + json.md5;
+      if (json.userType == 'instructor') {
+        location.replace("teacher.html" + params);
+      } else {
+        location.replace("student.html" + params);
+      }
+    }
+
+    function showSystemError() {
+      document.querySelector("#systemError").style.display = "block";
+    }
+
+    function showLoginError() {
+      document.querySelector("#loginError").style.display = "block";
+    }
+
+    function hideEverything() {
+      document.querySelector("#systemError").style.display = "none";
+      document.querySelector("#loginError").style.display = "none";
+    }
+
+
+
+  </script>
+  <style>
+    .error {
+      color: red
+    }
+  </style>
+  <center>
+    <h1>Currently in Development {Phase: BETA}</h1>
+  </center>
+</head>
+
+<body>
+  <form onsubmit="return login(event)">
+    <table>
+      <tr>
+        <td>Username</td>
+        <td><input type="text" name="username"></td>
+      </tr>
+      <tr>
+        <td>Password</td>
+        <td><input type="password" name="password"></td>
+      </tr>
+      <tr>
+        <td></td>
+        <td><input type="submit" value="Login" /></td>
+      </tr>
+    </table>
+  </form>
+  <br>
+  <table border="1">
+    <tr>
+      <th>Username</th>
+      <th>Password</th>
+    </tr>
+    <tr>
+      <th>student</th>
+      <th>student</th>
+    </tr>
+    <tr>
+      <th>instructor</th>
+      <th>instructor</th>
+    </tr>
+  </table>
+
+  <div id="systemError" class="error">
+    <h3>System error</h3>
+  </div>
+
+  <div id="loginError" class="error">
+    <h3>Incorrect user name or password</h3>
+  </div>
+
+  <script>
+    hideEverything();
+  </script>
+</body>

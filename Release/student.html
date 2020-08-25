@@ -1,0 +1,363 @@
+<html>
+
+<head>
+  <script src="onlineexam.js"></script>
+  <link rel="stylesheet" type="text/css" href="onlineexam.css">
+  <script>
+    var exam;
+    var questions;
+
+    // ------------------------- list of exams -------------------
+
+    // shows list of exams
+    function showExams() {
+      hideEverything();
+      show('exams');
+      loadExams();
+    }
+
+    // load exams created in the system and render html table
+    function loadExams() {
+      resultCallback = function (json) {
+        clearList('exams');
+        const table = document.querySelector("#exams .list");
+        json.exams.forEach(function (exam) {
+          const examQuestions = JSON.parse(exam.questions);
+          var row = appendRow(table, [exam.name, examQuestions.length]);
+
+          var takeButton = document.createElement("button");
+          takeButton.innerHTML = "Take exam";
+          var cell = row.insertCell(-1);
+          cell.appendChild(takeButton);
+          takeButton.addEventListener("click", function () {
+            // first load questions in case they were not loaded and then call takeExam()
+            loadQuestions(function (json) {
+              takeExam(exam, json.questions);
+            });
+          });
+        });
+      }
+      sendRequest("exams", resultCallback);
+    }
+
+
+    // ---------------------- taking exam code -------------------
+
+    // render form with questions for the exam
+    function takeExam(exam2, questions2) {
+      // set global vars to make exam & questions available during submit
+      exam = exam2;
+      questions = questions2;
+
+      // create map of questions by question.id to be able to look up questions by ids in exam.questions property
+      var questionMap = [];
+      questions.forEach(function (question) {
+        questionMap[question.id] = question;
+      });
+      const question_ids = JSON.parse(exam.questions);
+      const points = JSON.parse(exam.points);
+      show('veil');
+      show('examForm');
+      document.querySelector("#examName").innerHTML = exam.name;
+      const innerHolder = document.querySelector("#examQuestions");
+      innerHolder.innerHTML = ''; // clear old elements
+
+      question_ids.forEach(function (question_id, index) {
+        const question = questionMap[question_id];
+
+        // append div for question
+        var div = document.createElement('p');
+        div.innerHTML = `<b>${index + 1}. ${question.description}.</b><br>${points[index]} points.<br>` +
+          `Function name: <i>${question.functionName}</i><br>`;
+        if (question.constr) {
+          div.innerHTML += `Constraint: <i>${question.constr}</i>`;
+        }
+        innerHolder.appendChild(div);
+
+        // append textarea for answer
+        var textarea = document.createElement('textarea');
+        textarea.setAttribute("rows", "5");
+        textarea.setAttribute("cols", "70");
+        innerHolder.append(textarea);
+
+        // questions separator
+        innerHolder.append(document.createElement('hr'));
+      });
+    }
+
+    function examSubmit() {
+      // create map of questions by question.id to be able to look up questions by ids in exam.questions property
+      var questionMap = [];
+      questions.forEach(function (question) {
+        questionMap[question.id] = question;
+      });
+
+      var answers = [];
+
+      const question_ids = JSON.parse(exam.questions);
+      const points = JSON.parse(exam.points);
+
+      var inputs = document.querySelectorAll('textarea');
+      if (inputs.length != question_ids.length) {
+        console.log('Unexpected error: number of text areas found does not match number of questions in the exam');
+      }
+      var allEmpty = true;
+      inputs.forEach(function (input, index) {
+        const question_id = question_ids[index];
+        var answer = {
+          question: questionMap[question_id],
+          answer: input.value,
+          points: points[index]
+        };
+        if (input.value.trim()) {
+          allEmpty = false;
+        }
+        answers.push(answer);
+      });
+
+      if (allEmpty) {
+        alert("Please submit at least one answer");
+        return;
+      }
+      // validation passed, we may hide and submit the form
+      hide('veil');
+      hide('examForm');
+
+      const username = getUrlVars()["user"];
+      const md5 = getUrlVars()["md5"];
+      var formData = {
+        "exam_id": exam.id,
+        "answers": answers,
+        "takenOn": new Date(Date.now()).toLocaleString()
+      };
+
+      resultCallback = function (json) {
+        hideEverything();
+        show('success');
+      }
+      sendRequest("autograder", resultCallback, formData);
+    }
+
+
+    function examCancel() {
+      hide('veil');
+      hide('examForm');
+    }
+
+    // ---------------------- load questions ------------------
+
+    // loads list of questions. This does not render any view when result is received. 
+    // It just calls provided callback function
+    function loadQuestions(callback) {
+      sendRequest("questions", callback);
+    }
+
+    // ------------------ viewing exam results code ----------------
+
+    // shows list of results
+    function showResults() {
+      hideEverything();
+      show('results');
+      loadResults();
+    }
+
+    // load "Your exam results" and render html table with that list
+    function loadResults() {
+      resultCallback = function (json) {
+        clearList('results');
+        const table = document.querySelector("#results .list");
+        json.results.forEach(function (result) {
+          const row = appendRow(table, [result.examName, calcGrade(result.answers), result.takenOn]);
+
+          // append View button to the row
+          var viewButton = document.createElement("button");
+          viewButton.innerHTML = "View";
+          var cell = row.insertCell(-1);
+          cell.appendChild(viewButton);
+          viewButton.addEventListener("click", function () {
+            // first load questions in case they were not loaded and then call reviewResult
+            loadQuestions(function (json) {
+              viewResult(result, json.questions);
+            });
+          });
+
+          // append Delete button
+          var deleteButton = document.createElement("button");
+          deleteButton.innerHTML = "Delete";
+          var cell = row.insertCell(-1);
+          cell.appendChild(deleteButton);
+          deleteButton.addEventListener("click", function () {
+            deleteResult(result.id);
+          });
+        });
+      }
+      sendRequest("myResults", resultCallback);
+    }
+
+    // deletes result when student clicks on Delete button in "Your exam results" table
+    function deleteResult(result_id) {
+
+      var formData = {
+        "result_id": result_id,
+      };
+      sendRequest("deleteResult", loadResults, formData);
+    }
+
+
+    // render a form that contains a list of answers for a selected exam result
+    function viewResult(result, questions) {
+      show('veil');
+      show('reviewForm');
+      document.querySelector("#reviewFormExam").innerHTML = result.examName;
+      document.querySelector("#reviewFormDate").innerHTML = result.takenOn;
+      document.querySelector("#reviewFormGrade").innerHTML = calcGrade(result.answers);
+
+      // create map of questions by question.id to be able to join questions with answers
+      var questionMap = [];
+      questions.forEach(function (question) {
+        questionMap[question.id] = question;
+      });
+
+      clearList('reviewForm');
+      const table = document.querySelector("#reviewForm .list");
+      result.answers.forEach(function (answer, index) {
+
+        const question = questionMap[answer.question_id];
+        const bg = !!(index % 2) ? "#ccc" : "#ddd"; // alternating row backgr color
+
+        let tr = appendRow(table, [question.description, '' /*answer*/, `Max Points: ${answer.maxPoints}`]);
+        tr.style.backgroundColor = bg;
+        // set content of the answer td using <pre> tag so that it shows original Python indentation of the answer
+        const pre = document.createElement('pre');
+        pre.innerHTML = answer.answer;
+        const answerTd = tr.cells[1];
+        answerTd.appendChild(pre);
+
+        const commentInput = createFeedbackTable(`comment_${answer.id}`, answer.autograderComment);
+        tr = appendRow(table, ['']);
+        tr.style.backgroundColor = bg;
+        const commentTd = tr.cells[0];
+        commentTd.colSpan = 3;
+        commentTd.appendChild(commentInput);
+      });
+    }
+
+    function reviewClose() {
+      hide('veil');
+      hide('reviewForm');
+    }
+
+
+  </script>
+  <style>
+    /* specific to this page */
+    textarea {
+      width: 100%;
+    }
+  </style>
+</head>
+
+<body>
+  <table>
+    <tr>
+      <td>
+        <div class="menubutton" onclick="showExams()">Take Exam</div>
+      </td>
+      <td>
+        <div class="menubutton" onclick="showResults()">View Results</div>
+      </td>
+      <td>
+        <div class="menubutton" onclick="logout()">Log Out</div>
+      </td>
+      <td>
+        <div class="avatar">Logged in as: <span id="username"></span></div>
+        <div class="processing" style="display: none;">Processing...</div>
+      </td>
+    </tr>
+  </table>
+
+  <div id="exams" class="section">
+    <h3>Choose Exam</h3>
+    <table class="list" cellpadding="5">
+      <tr>
+        <th style="width:110px">Exam Name</th>
+        <th>Number of questions</th>
+        <th>
+          <!--this column is for 'Take' button-->
+        </th>
+      </tr>
+    </table>
+  </div>
+
+  <div id="examForm" class="form section" style="width:60%;left:18%">
+    <h3 id="examName"></h3>
+    <p>For every question write a Python function, which either returns or prints the value as described in the
+      question:</p>
+    <div id="examQuestions">
+    </div>
+    <div>
+      <button class="formSubmitButton" onclick="examSubmit()">Submit Answers</button>&nbsp;
+      <button onclick="examCancel()">Discard</button>
+    </div>
+  </div>
+
+  <div id="results" class="section">
+    <h3>Your exam results</h3>
+    <table class="list" cellpadding="5">
+      <tr>
+        <th>Exam name</th>
+        <th>Grade</th>
+        <th>Taken on</th>
+      </tr>
+    </table>
+  </div>
+
+  <div id="reviewForm" class="form section" style="width:80%;left:6%">
+    <h3>Your results:</h3>
+    <table>
+      <tr>
+        <td>Exam:</td>
+        <td><span id="reviewFormExam"></span></td>
+      </tr>
+      <tr>
+        <td>Exam taken on:</td>
+        <td><span id="reviewFormDate"></span></td>
+      </tr>
+      <tr>
+        <td>Grade:</td>
+        <td><span id="reviewFormGrade"></span></td>
+      </tr>
+    </table>
+    <table class="list" cellpadding="5" cellspacing="0">
+      <tr style="background-color: #ccc;">
+        <th style="width: 60%;">Question</th>
+        <th>Answer</th>
+        <th>Max Points</th>
+      </tr>
+    </table>
+    <div>
+      <button onclick="reviewClose()">Close</button>
+    </div>
+  </div>
+
+  <div id="veil" style="display:none"></div>
+
+  <div id="success" class="success section">
+    <h2>Your answers were submitted for review, please check back later</h2>
+  </div>
+
+  <div id="systemError" class="error section">
+    <h3>System error</h3>
+  </div>
+
+  <div id="loginError" class="error section">
+    <h3>Not Authorized</h3>
+  </div>
+
+  <script>
+    hideEverything();
+    displayCurrentUser();    
+  </script>
+</body>
+
+</html>

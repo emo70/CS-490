@@ -1,0 +1,860 @@
+<html>
+
+<head>
+  <script src="onlineexam.js"></script>
+  <link rel="stylesheet" type="text/css" href="onlineexam.css">
+  <script>
+    var questions; // stores list of questions after its loaded
+    var exams; // stores list of exams 
+    var result; // current result while it is being reviewed
+    var exam; // this is for new exam being added, containds 'selected' - list of selected questions, and 'notSelected' - other questions
+    var hideNewQuestionForm; // switches b/w 2 different functions depending on where new question form is called from
+    var newQuestionAfterSubmit; // switches b/w 2 different actions depending on where new question form is called from
+
+    // ------------------ reviewing exam results code. ----------------
+
+    // shows list of results
+    function showResults() {
+      hideEverything();
+      show('results');
+      loadResults();
+    }
+
+    // load pending exam results (that need review) and render html table with that list
+    function loadResults() {
+      resultCallback = function (json) {
+        clearList('results');
+        results = json.results;
+        const table = document.querySelector("#results .list");
+        results.forEach(function (result) {
+          const row = appendRow(table, [result.username, result.examName, calcGrade(result.answers), result.released ? "Yes" : "No", result.takenOn]);
+
+          var reviewButton = document.createElement("button");
+          reviewButton.innerHTML = "Review";
+          var cell = row.insertCell(-1);
+          cell.appendChild(reviewButton);
+          reviewButton.addEventListener("click", function () {
+            // first load questions in case they were not loaded and then call reviewResult
+            loadQuestions(function (json) {
+              questions = json.questions; // remember questions in global var
+              reviewResult(result);
+            });
+          });
+        });
+      }
+      sendRequest("pendingResults", resultCallback);
+    }
+
+    // render "Review/release results" form that contains a list of answers for a selected exam result
+    function reviewResult(result2) {
+      result = result2; // set global var to be able to access it from reviewResultSubmit()
+      show('veil');
+      show('reviewForm');
+      document.querySelector("#reviewFormStudent").innerHTML = result.username;
+      document.querySelector("#reviewFormExam").innerHTML = result.examName;
+      document.querySelector("#reviewFormDate").innerHTML = result.takenOn;
+
+      // create map of questions by question.id to be able to join questions with answers
+      var questionMap = [];
+      questions.forEach(function (question) {
+        questionMap[question.id] = question;
+      });
+
+      clearList('reviewForm');
+      const table = document.querySelector("#reviewForm .list");
+      result.answers.forEach(function (answer, index) {
+        const question = questionMap[answer.question_id];
+        const bg = !!(index % 2) ? "#ccc" : "#ddd"; // alternating row backgr color
+
+        let tr = appendRow(table, [question.description, '' /*answer*/, '']);
+        tr.style.backgroundColor = bg;
+        // set content of the answer td using <pre> tag so that it shows original Python indentation of the answer
+        const pre = document.createElement('pre');
+        pre.innerHTML = answer.answer || "No answer";
+        const answerTd = tr.cells[1];
+        answerTd.appendChild(pre);
+        if (answer.autograderComment != NO_ANSWER_COMMENT) {
+          const commentInput = createFeedbackTable(`comment_${answer.id}`,
+            answer.autograderComment, answer.maxPoints, updateGrade);
+          tr = appendRow(table, ['']);
+          tr.style.backgroundColor = bg;
+          const commentTd = tr.cells[0];
+          commentTd.colSpan = 3;
+          commentTd.appendChild(commentInput);
+        }
+
+      });
+      updateGrade();
+    }
+
+
+    // this function updates grade based on revew form scores inputs. 
+    // Its called to initially display the grade
+    // and whenever the scores are changed in the form
+    function updateGrade() {
+      let score = 0;
+      let maxScore = 0;
+      // global var result was populated by reviewResult()
+      result.answers.forEach(function (answer) {
+        maxScore += answer.maxPoints;
+
+        data = getFeedbackData(answer.id);
+        if (data != NO_ANSWER_COMMENT) {
+          for (subitem of data.items) {
+            if (subitem.score) {
+              score += subitem.score;
+            }
+          }
+        }
+
+      });
+      let grade = Math.round(score * 100 / maxScore);
+      document.querySelector("#reviewFormGrade").value = grade;
+    }
+
+    function getFeedback() {
+      let comments = [];
+      // global var result was populated by reviewResult()
+      result.answers.forEach(function (answer) {
+        const comment = getFeedbackData(answer.id);
+        const commentData = {
+          answer_id: answer.id,
+          text: (comment == NO_ANSWER_COMMENT ? comment : JSON.stringify(comment))
+        };
+        comments.push(commentData);
+      });
+      return comments;
+    }
+
+    // this function releases selected exam results for viewing by the student
+    function reviewSubmit() {
+      hide('veil');
+      hide('reviewForm');
+      var formData = {
+        "result_id": result.id,
+        "grade": document.querySelector("#reviewFormGrade").value,
+        "comments": getFeedback()
+      };
+      sendRequest("releaseResult", loadResults, formData);
+    }
+
+    // closes review form if canceled
+    function reviewCancel() {
+      hide('veil');
+      hide('reviewForm');
+    }
+
+
+
+    // ------------------------- managing list of exams -------------------
+
+    // shows list of exams
+    function showExams() {
+      hideEverything();
+      show('exams');
+      loadExams();
+    }
+
+    // load exams created in the system and render html table
+    function loadExams() {
+      resultsCallback = function (json) {
+        clearList('exams');
+        const table = document.querySelector("#exams .list");
+        json.exams.forEach(function (exam) {
+          const examQuestions = JSON.parse(exam.questions);
+          var row = appendRow(table, [exam.name, examQuestions.length, exam.created]);
+
+          // append Delete button
+          var deleteButton = document.createElement("button");
+          deleteButton.innerHTML = "Delete";
+          var cell = row.insertCell(-1);
+          cell.appendChild(deleteButton);
+          deleteButton.addEventListener("click", function () {
+            var formData = {
+              "exam_id": exam.id,
+            };
+            sendRequest("deleteExam", loadExams, formData);
+          });
+
+        });
+      }
+      sendRequest("exams", resultsCallback);
+    }
+
+    // shows the form for creating of new exam
+    function newExam() {
+      clearExamForm();
+      show('veil');
+      show('examForm');
+      callback = function (json) {
+        questions = json.questions; // remember questions in global var
+        document.querySelector("#examName").focus();
+
+        var notSelected = [];
+        questions.forEach(function (question) {
+          notSelected.push(question);
+        });
+        exam = {
+          'selected': [],
+          'notSelected': notSelected
+        }
+        renderNewExamForm();
+      };
+      loadQuestions(callback);
+    }
+
+    // This is called
+    // 1. To initially render new exam form lists of questions (left and right)
+    // 2. To re-render these lists every time question is added or removed from current exam
+    function renderNewExamForm() {
+      adjustNewExamForm();
+      clearList('examQuestions');
+      var table = document.querySelector("#examQuestions .list");
+      exam.selected.forEach(function (question) {
+        const row = appendRow(table, [question.category, question.difficulty, question.description], true);
+
+        //points input
+        const inp = document.createElement("input");
+        inp.type = "number";
+        inp.min = "10";
+        inp.max = "100";
+        inp.style.width = "40px";
+        if (!!question.points) {
+          inp.value = question.points
+        } else {
+          inp.value = question.points = "25";
+        }
+        inp.addEventListener('change', (e) => {
+          question['points'] = e.target.value;
+        });
+        const cell = row.insertCell(-1);
+        cell.appendChild(inp);
+
+        //remove button
+        const removeButton = document.createElement("BUTTON");
+        removeButton.innerHTML = "Remove ->";
+        removeButton.addEventListener("click", function () {
+          //add
+          exam.notSelected.push(question);
+          //remove
+          const index = exam.selected.indexOf(question);
+          if (index > -1) {
+            exam.selected.splice(index, 1);
+          }
+          renderNewExamForm();
+        });
+
+        const cell2 = row.insertCell(-1);
+        cell2.appendChild(removeButton);
+      });
+      document.querySelector("#selectedQNum").innerHTML = "" + exam.selected.length;
+
+      renderFilteredExamQuestions();
+
+    }
+
+    function renderFilteredExamQuestions() {
+      const filteredQuestions = filterQuestions(exam.notSelected, 'allQuestions');
+      clearList('allQuestions');
+      table = document.querySelector("#allQuestions .list");
+      filteredQuestions.forEach(function (question) {
+        const row = appendRow(table, [question.category, question.difficulty, question.description], true);
+        const addButton = document.createElement("BUTTON");
+        addButton.innerHTML = "<- Add to Exam";
+        addButton.addEventListener("click", function () {
+          //add
+          exam.selected.push(question);
+          //remove
+          const index = exam.notSelected.indexOf(question);
+          if (index > -1) {
+            exam.notSelected.splice(index, 1);
+          }
+          renderNewExamForm();
+        });
+        const cell = row.insertCell(-1);
+        cell.appendChild(addButton);
+      });
+    }
+
+    function adjustNewExamForm() {
+      const tableWidth = document.body.offsetWidth / 2 - 50;
+      var table = document.querySelector("#examQuestions .list");
+      table.style.width = tableWidth + "px";
+      table = document.querySelector("#allQuestions .list");
+      table.style.width = tableWidth + "px";
+    }
+
+    window.addEventListener('resize', adjustNewExamForm);
+
+    // get question IDs that instructor included into the new exam
+    function getExamQuestionIds() {
+      var questionIds = [];
+      exam.selected.forEach(function (question) {
+        questionIds.push(question.id);
+      });
+      return questionIds;
+    }
+
+    // get question points that instructor set in the new exam
+    function getExamPoints() {
+      var points = [];
+      exam.selected.forEach(function (question) {
+        points.push(+question.points);
+      });
+      return points;
+    }
+
+    // sends new exam to the server for saving
+    function newExamSubmit() {
+      // validation
+      const examName = document.querySelector("#examName").value;
+      if (!examName) {
+        alert("Please specify exam name");
+        return;
+      }
+
+      if (!exam.selected.length) {
+        alert("Please select some questions for this exam")
+        return;
+      }
+
+      // submit
+      hide('veil');
+      hide('examForm');
+
+      var formData = {
+        "name": examName,
+        "questions": JSON.stringify(getExamQuestionIds()),
+        "points": JSON.stringify(getExamPoints()),
+        "created": new Date(Date.now()).toLocaleString()
+      };
+
+      sendRequest("addExam", loadExams, formData);
+    }
+
+    function newExamCancel() {
+      hide('veil');
+      hide('examForm');
+    }
+
+    // clears the only fiels on the exam form. The chekboxes are cleared when html table rebuilt
+    function clearExamForm() {
+      document.querySelector("#examName").value = '';
+    }
+
+
+
+    // --------------------------- managing list of questions -----------------
+
+    // shows list of questions
+    function showQuestions() {
+      hideEverything();
+      show('questions');
+      loadQuestions();
+    }
+
+    // loads list of questions and either renders html table, or, if callback is provided, calls it
+    function loadQuestions(callback) {
+
+      if (!callback) {
+        // callback not defined: use standard callback for rendering Questions view
+        callback = function (json) {
+          questions = json.questions; // remember questions in global var          
+          renderFilteredQuestions();
+        }
+      }
+      sendRequest("questions", callback);
+    }
+
+    // function renderFilteredQuestions is called for 
+    // initial rendering of the questions list as well as 
+    // every time when filter values are updated
+    function renderFilteredQuestions() {
+      const filteredQuestions = filterQuestions(questions, 'questions');
+      clearList('questions');
+      const table = document.querySelector("#questions .list");
+      for (const question of filteredQuestions) {
+        var row = appendRow(table, [question.category, question.difficulty, question.description, question.functionName]);
+
+        // append Delete button
+        var deleteButton = document.createElement("button");
+        deleteButton.innerHTML = "Delete";
+        var cell = row.insertCell(-1);
+        cell.appendChild(deleteButton);
+        deleteButton.addEventListener("click", function () {
+          var formData = {
+            "question_id": question.id,
+          };
+          const resultCallback = function (json) {
+            loadQuestions();
+          }
+          sendRequest("deleteQuestion", resultCallback, formData);
+        });
+      };
+    }
+
+
+
+    // shows 'Add new question' form
+    function newQuestion() {
+      clearQuestionForm();
+      show('veil');
+      show('questionForm');
+      document.querySelector("#questionForm").style.left = "180px";
+
+      hideNewQuestionForm = function () {
+        hide('veil');
+        hide('questionForm');
+      }
+
+      newQuestionAfterSubmit = function (json) {
+        loadQuestions();
+      }
+    }
+
+    // shows 'Add new question' on the 'Add new exam' form. 
+    // the difference with newQuestion is that this form needs to be on top of the other form
+    function newQuestionExam() {
+      clearQuestionForm();
+      document.querySelector("#veil").style.zIndex = 25; // veil is already shown, just need to move z-index to cover exam form
+      show('questionForm');
+      document.querySelector("#questionForm").style.left = "50%";
+
+      hideNewQuestionForm = function () {
+        document.querySelector("#veil").style.zIndex = 10; // return veil zIndex to normal (suitable for other forms)
+        hide('questionForm');
+      }
+
+      newQuestionAfterSubmit = function (json) {
+        const onQuestionsLoaded = function (json) {
+          questions = json.questions; // remember questions in global var
+          // remember all selected questionIds
+          var questionIds = getExamQuestionIds();
+          // re-populate both selected and notSelected questions based on reloaded questions after submit
+          var newSelected = [];
+          var newNotSelected = [];
+          questions.forEach(function (question) {
+            var index = questionIds.indexOf(question.id);
+            if (index == -1) {
+              newNotSelected.push(question);
+            } else {
+              newSelected.push(question);
+            }
+          });
+          exam['selected'] = newSelected;
+          exam['notSelected'] = newNotSelected;
+          renderNewExamForm();
+        }
+        loadQuestions(onQuestionsLoaded);
+      }
+    }
+
+    // sends new question to the server for adding to question bank
+    function newQuestionSubmit() {
+      // validation
+      const functionName = document.querySelector("#functionName").value;
+      if (!functionName) {
+        alert("Please specify Function name");
+        return;
+      }
+      const description = document.querySelector("#questionDescription").value;
+      if (!description) {
+        alert("Please specify Description");
+        return;
+      }
+      const testCases = getTestCases();
+      if (testCases.error) {
+        alert(testCases.error);
+        return;
+      }
+
+      // submit
+      //hide('veil');
+      //hide('questionForm');
+      hideNewQuestionForm();
+      const username = getUrlVars()["user"];
+      const md5 = getUrlVars()["md5"];
+      var formData = {
+        "category": document.querySelector("#category").value,
+        "description": description,
+        "functionName": functionName,
+        "difficulty": document.querySelector("#difficulty").value,
+        "testCaseValues": testCases.testCaseValues,
+        "testCaseResults": testCases.testCaseResults,
+        "constr": document.querySelector("#constr").value,
+      };
+      console.log(formData);
+      sendRequest("addQuestion", newQuestionAfterSubmit, formData);
+    }
+
+    // clears 'add new question' form
+    function clearQuestionForm() {
+      document.querySelector("#functionName").value = '';
+      document.querySelector("#questionDescription").value = '';
+
+      const testCases = document.querySelectorAll(".testCase");
+      for (const testCase of testCases) {
+        testCase.remove();
+      }
+      addTestCase();
+      addTestCase();
+    }
+
+    function addTestCase() {
+      const table = document.querySelector("#testCases");
+      const tbody = table.getElementsByTagName('tbody')[0];
+      const row = document.createElement("tr");
+      row.className = "testCase";
+      for (let i = 0; i < 4; i++) {
+        const cell = document.createElement("td");
+        const inp = document.createElement("input");
+        cell.appendChild(inp);
+        row.appendChild(cell);
+      }
+      const cell = document.createElement("td");
+      const deleteButton = document.createElement('button');
+      deleteButton.innerHTML = "Delete";
+      deleteButton.addEventListener('click', e => {
+        row.remove();
+      });
+      cell.appendChild(deleteButton);
+      row.appendChild(cell);
+
+      tbody.appendChild(row);
+      return row;
+    }
+
+    // validate test cases specified in the add questions form and return json containing either test cases or error message
+    function getTestCases() {
+      var outputs = [];
+      var allInputs = [];
+      const testCases = document.querySelectorAll(".testCase");
+      if (testCases.length < 2 || testCases.length > 6) {
+        const result = { 'error': 'Must specify 2 to 6 test cases' };
+        return result;
+      }
+      for (const testCase of testCases) {
+        var inputs = [];
+        const textBoxes = testCase.querySelectorAll("input");
+        for (let i = 0; i < 3; i++) {
+          const value = textBoxes[i].value
+          if (value) {
+            inputs.push(value);
+          }
+        }
+        const output = textBoxes[3].value;
+        if (!output) {
+          const result = { 'error': 'Missing Output for a test case' };
+          return result;
+        }
+        outputs.push(output);
+        allInputs.push(inputs);
+
+      }
+
+      // make sure all test cases have equal number of Input values
+      if (allInputs.length) {
+        const paramCount = allInputs[0].length;
+        for (let caseNum = 1; caseNum <= testCases.length - 1; caseNum++) {
+          if (caseNum < allInputs.length) {
+            if (paramCount != allInputs[caseNum].length) {
+              const result = { 'error': 'All test cases must have equal number of Input values' };
+              return result;
+            }
+          }
+        }
+      }
+      // convert arrays to strings because we store the entire array in one DB varchar field
+      const result = {
+        "testCaseValues": JSON.stringify(allInputs),
+        "testCaseResults": JSON.stringify(outputs)
+      }
+      return result;
+    }
+
+    function newQuestionCancel() {
+      hideNewQuestionForm();
+    }
+
+  </script>
+  <style>
+    /* specific to this page */
+    #testCases th {
+      font-weight: normal
+    }
+
+    #testCases input {
+      width: 60px
+    }
+
+    button {
+      white-space: nowrap
+    }
+  </style>
+</head>
+
+<body>
+  <table>
+    <tr>
+      <td>
+        <div class="menubutton" onclick="showQuestions()">Question Bank</div>
+      </td>
+      <td>
+        <div class="menubutton" onclick="showExams()">Exams</div>
+      </td>
+      <td>
+        <div class="menubutton" onclick="showResults()">Results</div>
+      </td>
+      <td>
+        <div class="menubutton" onclick="logout()">Log Out</div>
+      </td>
+      <td>
+        <div class="avatar">Logged in as: <span id="username"></span></div>
+        <div class="processing" style="display: none;">Processing...</div>
+      </td>
+    </tr>
+  </table>
+  <div id="questions" class="section">
+    <h3 style="display: inline-block;">Question Bank</h3>
+    <button onclick="newQuestion()" style="display: inline-block;">Add New</button>
+    <div style="display: inline-block;" id="questions-filter"></div>
+
+    <table class="list" cellpadding="5">
+      <tr>
+        <th style="width:110px">Topic</th>
+        <th>Difficulty</th>
+        <th>Description</th>
+        <th>Function Name</th>
+      </tr>
+      <tr style="background-color: #ddd;">
+        <td>
+          <select name="category" class="filter-input">
+            <option value="" selected>Filter by topic:</option>
+          </select>
+        </td>
+        <td>
+          <select name="difficulty" class="filter-input">
+            <option value="" selected>Filter by difficulty:</option>
+          </select>
+        </td>
+        <td><input type="text" name="description" class="filter-input" placeholder="Filter by keyword:" />
+        </td>
+        <td></td>
+        <td><button name="clear-filter">Clear filter</button></td>
+      </tr>
+    </table>
+  </div>
+
+  <div id="exams" class="section">
+    <button onclick="newExam()" class="addButton">Add New</button>
+    <h3>All exams</h3>
+    <table class="list" cellpadding="5">
+      <tr>
+        <th style="width:110px">Exam Name</th>
+        <th>Number of questions</th>
+        <th>Created on</th>
+      </tr>
+    </table>
+  </div>
+
+  <div id="examForm" class="form section" style="left:0; right:0; padding-left:20px; padding-right: 20px">
+    <h3>Add new Exam</h3>
+    <input type="text" id="examName" style="width:30%" placeholder="Exam name" />
+    <p>Select questions from the Question Bank and add them to the exam. When done, click Submit button on the bottom of
+      the form.</p>
+    <div style="width:100%; white-space: nowrap">
+      <div style="display:inline-block">
+        <h4>You have selected <span id="selectedQNum" style="color:blue">0</span> question(s):</h4>
+        <div id="examQuestions">
+          <table class="list" cellpadding="5">
+            <tr>
+              <th style="width:110px">Topic</th>
+              <th>Description</th>
+              <th>Difficulty</th>
+              <th>Points</th>
+              <th>
+                <!--remove-->
+              </th>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <div style="display:inline-block; padding-left:60px">
+        <h4 style="display:inline-block">Question Bank:</h4>
+        <button onclick="newQuestionExam()" style="display:inline-block">Add New</button>
+
+        <div id="allQuestions">
+          <table class="list" cellpadding="5">
+            <tr>
+              <th style="width:110px">Topic</th>
+              <th>Description</th>
+              <th>Difficulty</th>
+              <th style="width:100px">
+                <!--add-->
+              </th>
+            </tr>
+            <tr style="background-color: #aaa;">
+              <td>
+                <select name="category" class="filter-input">
+                  <option value="" selected>Filter by topic:</option>
+                </select>
+              </td>
+              <td>
+                <select name="difficulty" class="filter-input">
+                  <option value="" selected>Filter by difficulty:</option>
+                </select>
+              </td>
+              <td><input type="text" name="description" class="filter-input" placeholder="Filter by keyword:" />
+              </td>
+              <td><button name="clear-filter">Clear filter</button></td>
+            </tr>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div>
+      <button class="formSubmitButton" onclick="newExamSubmit()">Submit</button>&nbsp;
+      <button onclick="newExamCancel()">Cancel</button>
+    </div>
+  </div>
+
+  <div id="questionForm" class="form section" style="width:550px; z-index:30">
+    <h3>Add new question to the bank</h3>
+
+    <table cellpadding="5">
+      <tr>
+        <td colspan="2">
+          <p>Specify question of the form "Write a function named _________ that takes arguments ___________ does
+            ________________________ and returns (or prints) the result."</p>
+        </td>
+      </tr>
+      <tr>
+        <td class="header" style="width:110px">Topic*</td>
+        <td>
+          <select id="category">
+          </select>
+        </td>
+      </tr>
+      <tr>
+        <td class="header">Difficulty*</td>
+        <td>
+          <select id="difficulty">
+          </select>
+        </td>
+      </tr>
+      <tr>
+        <td>Description*</td>
+        <td><textarea id="questionDescription" rows="4" cols="50"
+            placeholder="Please describe what the function supposed to return (or print)"></textarea>
+        </td>
+      </tr>
+      <tr>
+        <td>Function name*</td>
+        <td><input type="text" id="functionName" /></td>
+      </tr>
+      <tr>
+        <td>Constraint</td>
+        <td><select id="constr">
+            <option value="">None</option>
+            <option value="Must use 'print' operator">Must use 'print' statement</option>
+            <option value="Must use 'if' operator">Must use 'if' statement</option>
+            <option value="Must use 'for' loop">Must use 'for' loop</option>
+            <option value="Must use 'while' loop">Must use 'while' loop</option>
+            <option value="Must use 'break' statement">Must use 'break' statement</option>
+            <option value="Must use 'continue' statement">Must use 'continue' statement</option>
+            <option value="Must use 'range' function">Must use 'range' function</option>
+          </select>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding-top:5px">Test cases*</td>
+        <td>
+          <p>Specify 2 to 6 test cases.</p>
+          <p>Inputs: number of Inputs should match number of arguments in the function. <i>Surround string values with
+              quotes.</i></p>
+          <p>Outputs: required for each test case. <i>Do not include quotes for any values.</i></p>
+          <table id="testCases">
+            <tr style="background-color: #bbb;">
+              <th>Input 1</th>
+              <th>Input 2</th>
+              <th>Input 3</th>
+              <th>Output*</th>
+              <th></th>
+            </tr>
+          </table>
+          <button onclick="addTestCase();">Add New</button>
+        </td>
+      </tr>
+      <tr>
+        <td></td>
+        <td><button class="formSubmitButton" onclick="newQuestionSubmit()">Submit</button>&nbsp;<button
+            onclick="newQuestionCancel()">Cancel</button></td>
+      </tr>
+    </table>
+  </div>
+
+  <div id="results" class="section">
+    <h3>Results pending review</h3>
+    <table class="list" cellpadding="5">
+      <tr>
+        <th style="width:110px">Student's user name</th>
+        <th>Exam name</th>
+        <th>Grade</th>
+        <th>Released</th>
+        <th>Taken on</th>
+      </tr>
+    </table>
+  </div>
+
+  <div id="reviewForm" class="form section" style="width:80%;left:6%">
+    <h3>Review/release results:</h3>
+    <table>
+      <tr>
+        <td>Student:</td>
+        <td><span id="reviewFormStudent"></span></td>
+      </tr>
+      <tr>
+        <td>Exam:</td>
+        <td><span id="reviewFormExam"></span></td>
+      </tr>
+      <tr>
+        <td>Exam taken on:</td>
+        <td><span id="reviewFormDate"></span></td>
+      </tr>
+      <tr>
+        <td>Grade:</td>
+        <td><input id="reviewFormGrade" type="text" style="width:50px" disabled />/100</td>
+      </tr>
+    </table>
+    <table class="list" cellpadding="5" cellspacing="0">
+      <tr style="background-color: #ccc;">
+        <th style="width: 60%;">Question</th>
+        <th>Answer</th>
+        <th></th>
+      </tr>
+    </table>
+    <div>
+      <button class="formSubmitButton" onclick="reviewSubmit()">Release</button>&nbsp;
+      <button onclick="reviewCancel()">Cancel</button>
+    </div>
+  </div>
+
+  <div id="veil" style="display:none"></div>
+
+  <div id="systemError" class="error section">
+    <h3>System error</h3>
+  </div>
+
+  <div id="loginError" class="error section">
+    <h3>Not Authorized</h3>
+  </div>
+
+  <script>
+    hideEverything();
+    displayCurrentUser();
+    initLists();
+    initFilters();
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,58 @@
+/* common */
+.error {color: red}
+.success {color: green}
+
+th {text-align: left}
+
+.menubutton {
+  background-color:#ddd;
+  width: 150px;
+  height: 30px;
+  line-height: 30px;
+  text-align:center;
+  cursor: pointer;
+}
+.menubutton:hover {
+  background-color:#bbb;
+}
+
+.avatar {
+  font-style: italic;
+  width: 200px;
+  text-align: right;
+}
+
+#veil {
+  width: 100%;
+  height: 100%;
+  opacity: 80%;
+  z-index: 10;
+  position: absolute;
+  top: 0;
+  left: 0;
+  background-color: white;
+}
+
+.form {
+  z-index: 20;
+  display: block;
+  background-color: #ddd;
+  position: absolute;
+  top: 50px;
+  padding: 0 30px 30px 30px;
+  
+}
+
+.addButton {
+  left: 140px;
+  position: absolute;
+}
+.formSubmitButton {
+  margin-top: 15px
+}
+.list td, .list th, .form td, .form th {
+  vertical-align: top;
+}
+textarea {
+  font-family:Consolas,Monaco,Lucida Console,Liberation Mono,DejaVu Sans Mono,Bitstream Vera Sans Mono,Courier New, monospace;
+}
